@@ -1,0 +1,60 @@
+name: CI/CD Pipeline de Aplicación Flask
+
+# 1. Define cuándo se ejecuta el workflow
+on:
+  push:
+    branches: [ main ] # Se ejecuta en cada push a la rama 'main'
+  pull_request:
+    branches: [ main ] # Se ejecuta en cada pull request a la rama 'main'
+
+# 2. Define los trabajos (jobs) que se ejecutarán
+jobs:
+  test-build-and-push: # Nombre del trabajo (puedes ponerle el que quieras)
+    runs-on: ubuntu-latest # El tipo de máquina virtual donde se ejecutará (Ubuntu es común)
+
+    # 3. Define los pasos (steps) dentro del trabajo
+    steps:
+    - name: Checkout del código
+      uses: actions/checkout@v4 # Acción predefinida para descargar el código del repo
+
+    - name: Configurar Python
+      uses: actions/setup-python@v5 # Acción predefinida para configurar Python
+      with:
+        python-version: '3.9' # Asegúrate que sea la misma versión de Python que usas en tu Dockerfile y localmente
+
+    - name: Instalar dependencias
+      run: |
+        python -m venv venv
+        source venv/bin/activate  # En Linux/macOS. En Windows sería `.\venv\Scripts\activate` pero ubuntu-latest es Linux
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Ejecutar pruebas unitarias y generar reporte de cobertura
+      run: |
+        source venv/bin/activate
+        pytest --cov=app --cov-report=xml # Genera cobertura en formato XML (útil para otras herramientas)
+
+    # --- PASOS PARA DOCKER (OPCIONALES SI SOLO QUIERES PROBAR) ---
+
+    - name: Login a Docker Hub
+      # Solo se ejecuta si el evento es un 'push' a la rama 'main'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }} # Usar un token, no la contraseña directa
+
+    - name: Construir y etiquetar imagen Docker
+      # Solo se ejecuta si el evento es un 'push' a la rama 'main'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/mi-app-flask:${{ github.sha }} .
+        docker tag ${{ secrets.DOCKERHUB_USERNAME }}/mi-app-flask:${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/mi-app-flask:latest
+        # La etiqueta github.sha es el hash del commit, lo que hace única cada imagen construida
+
+    - name: Push de imagen Docker a Docker Hub
+      # Solo se ejecuta si el evento es un 'push' a la rama 'main'
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      run: |
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/mi-app-flask:${{ github.sha }}
+        docker push ${{ secrets.DOCKERHUB_USERNAME }}/mi-app-flask:latest
