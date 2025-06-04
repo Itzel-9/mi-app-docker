@@ -1,0 +1,85 @@
+# .github/workflows/validacion_docker.yml
+name: Docker Build Validation Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate_docker_setup:
+    name: Validate Docker Setup and Build
+    runs-on: ubuntu-latest
+    env:
+      GIT_SHA: ${{ github.sha }}
+      # DOCKERHUB_USERNAME se define a partir del secret.
+      # Será usado por docker/build-push-action para el login (junto con el token)
+      # si la acción lo requiere o si usaras docker/login-action explícitamente.
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install Python dependencies
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Flask unit tests
+        run: |
+          source venv/bin/activate
+          pytest --cov=app --cov-report=xml
+
+      - name: Lint Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: ./Dockerfile
+          failure-threshold: warning
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate build and (conditionally) push with docker/build-push-action
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # Etiquetas para la imagen: 'itzel9' está directamente aquí.
+          tags: |
+            itzel9/mi-app-flask:${{ env.GIT_SHA }}
+            itzel9/mi-app-flask:latest
+          # El token es esencial para el push.
+          # La acción usa DOCKERHUB_USERNAME (del env, que viene del secret) y este token para autenticarse.
+          secrets: |
+            GIT_AUTH_TOKEN=${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Validate build with docker/bake-action
+        # if: hashFiles('docker-bake.hcl') # Descomenta si el archivo es opcional
+        uses: docker/bake-action@v4
+        with:
+          push: false # Este paso solo valida la construcción con Bake
+          files: |
+            ./docker-bake.hcl
+          # Si docker-bake.hcl necesita generar etiquetas con 'itzel9/',
+          # puedes pasarlo a través de 'set' o asegurarte de que Bake acceda
+          # a una variable de entorno si defines DOCKERHUB_USERNAME o un nombre similar.
+          # Ejemplo para asegurar que el target 'app-check' use etiquetas con 'itzel9':
+          set: |
+            app-check.tags=itzel9/mi-app-flask-bake-check:${{ env.GIT_SHA }}
+            # Si tuvieras un target 'app-release' en Bake que también necesita 'itzel9' para tags
+            # podrías hacer algo similar:
+            # app-release.tags=itzel9/mi-app-flask-release:${{ env.GIT_SHA }},itzel9/mi-app-flask-release:latest
